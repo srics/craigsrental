@@ -7,30 +7,32 @@ Dependencies:
 
 import urllib2
 import ConfigParser
-import smtplib
+import time
 
+import smtplib
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 from functools import wraps
-from time import time
 from bs4 import BeautifulSoup
 
 def timed(f):
   @wraps(f)
   def wrapper(*args, **kwds):
-    start = time()
+    start = time.time()
     result = f(*args, **kwds)
-    elapsed = time() - start
+    elapsed = time.time() - start
     print "%s took %d secs to finish" % (f.__name__, elapsed)
     return result
   return wrapper
 
 class CrglistGlobals:
 	'''
-	Global constants for Crglist
+	Global constants and configuration for Crglist App
 	'''
 
 	def CraigsMain(self):
-		config_defaults = {'level':"1", "page_save_file": "/Users/srramasw/craigs.html"}
+		config_defaults = {'level':"1"}
 		config = ConfigParser.ConfigParser(config_defaults)
 		config.read('config')
 		
@@ -41,7 +43,7 @@ class CrglistGlobals:
 		self.SMTP_PW = eval(config.get('Main', 'smtppw'))
 
 		self.DEBUG = config.getint('Debug', 'level')
-		self.PAGE_SAVE_FILE = config.get('Debug', 'page_save_file')
+		self.PAGE_SAVE_FILE = eval(config.get('Debug', 'page_save_file'))
 
 		print self.PAGE_SAVE_FILE
 
@@ -62,8 +64,9 @@ class CrglistGlobals:
 		ca = CrglistAnalyser(self)
 		adlistings = ca.ListingCollector(page_content)
 		# listings = ca.ListingCollectorFromFile(page_file=CrglistGlobals.PAGE_SAVE_FILE)
-
-		print adlistings
+		
+		if self.DEBUG > 1:
+			print adlistings
 
 		CraigsEmailer.sendemail(self, adlistings)
 
@@ -72,36 +75,61 @@ class CraigsEmailer:
 	@staticmethod
 	def sendemail(CG, adlistings):
 
-		admsg = []
-		for ad in adlistings: 
-			adline = "Date: {date}, Title: {title}, City: {city}, Price: {price}\n".format(date=ad[0], title=ad[1], url=ad[2], price=ad[3], sqft=ad[4], city=ad[5])
-			print "Adline " + adline
-			admsg.append(adline)
-			print "Admsg " + str(admsg)
+		curdatetime = time.strftime("%c")
 
-		print "Emailer ...."
-		email_body = ''.join(admsg)
-		print email_body
+		html = """<html>
+ 				<head></head>
+  				<body>
+    			<p>Hi!<br>
+       			Craigslist Cupertino Rental Listing<br>
+      			Generated at {page_gen_datetime}.
+			    </p>
+			    <table>
+			    <tr>
+			    <th> Date </th>
+			    <th> Title </th>
+			    <th> City </th>
+			    <th> Price </th>
+			    <th>    Bedroom / SQFT    </th>
+			    </tr>
+			    """.format(page_gen_datetime=curdatetime)
 
-		msg = MIMEText(email_body)
+
+		for ad in adlistings: 			
+			html_line = "<tr><td> {date} </td><td> <a href=""http://sfbay.craigslist.org/{url}"">{title}</a> </td><td> {city} </td><td> {price} </td><td> {sqft} </td></tr>".format(date=ad[0], title=ad[1], url=ad[2], price=ad[3], sqft=ad[4], city=ad[5])
+			if CG.DEBUG > 1:
+				print "html_line is" + html_line
+			html += html_line
+
+		html +="""
+				</table>
+			  	</body>
+				</html>
+				"""
+
+		print "Prepare sending email ...."
+
+		msg = MIMEMultipart('alternative')
 		
 		# me == the sender's email address
 		# you == the recipient's email address
-		msg['Subject'] = 'CG Listings'
+		msg['Subject'] = 'CG Listings ' + curdatetime
 		msg['From'] = CG.EMAIL_SENDER
 		msg['To'] = CG.EMAIL_RECIPIENTS
 
+		part1 = MIMEText(html, 'html')
+		msg.attach(part1)
 
-		print "Sending email via %s user %s pw %s sender %s, recv %s" % (CG.SMTP_HOST, CG.SMTP_USER, CG.SMTP_PW, CG.EMAIL_SENDER, CG.EMAIL_RECIPIENTS)
+		if CG.DEBUG > 1:
+			print "Sending email via %s user %s pw %s sender %s, recv %s" % (CG.SMTP_HOST, CG.SMTP_USER, CG.SMTP_PW, CG.EMAIL_SENDER, CG.EMAIL_RECIPIENTS)
 
-		print "start ssl"
 		s = smtplib.SMTP_SSL(CG.SMTP_HOST)
-		print "after ssl"
 		s.login(CG.SMTP_USER, CG.SMTP_PW)
-		print "after login"
 		s.sendmail(CG.EMAIL_SENDER, [CG.EMAIL_RECIPIENTS], msg.as_string())
-		print "after sendmail"
+		
 		s.quit()
+
+		print "Successfully sent email"
 
 
 class CrglistDownloader:
@@ -192,22 +220,23 @@ class CrglistAnalyser:
 				for elem in elements:
 					print "  Elem: " + str(elem)
 
-			date = elements[5].find("span", "date").contents
-			adtitle = elements[5].a.get_text()
-			url = elements[5].a['href']
-			price = elements[7].find("span","price").contents
-			sqft = elements[7].contents[2]
-			city = elements[7].find("span", "pnr").contents[1].contents
+			date = elements[5].find("span", "date").contents[0].encode("ascii")
+			adtitle = elements[5].a.get_text().encode("ascii", "ignore")
+			url = elements[5].a['href'].encode("ascii")
+			price = elements[7].find("span","price").contents[0].encode("ascii")
+			sqft = elements[7].contents[2].encode("ascii", "ignore")
+			city = elements[7].find("span", "pnr").contents[1].contents[0].encode("ascii")
 
-			print "---------------------------"
-			print "Date  " + repr(date)
-			print "Title " + repr(adtitle)
-			print "URL   " + repr(url)
-			print "Price " + repr(price)
-			print "SQFt  " + repr(sqft)
-			print "City  " + repr(city)
+			if self.CG.DEBUG > 1:
+				print "---------------------------"
+				print "Date  " + date
+				print "Title " + adtitle
+				print "URL   " + url
+				print "Price " + price
+				print "SQFt  " + sqft
+				print "City  " + city
 
-			adlistings.append([repr(date), repr(adtitle), repr(url), repr(price), repr(sqft), repr(city)])
+			adlistings.append([date, adtitle, url, price, sqft, city])
 
 		print "Found %d listings" % len(adlistings)
 		return adlistings
@@ -216,6 +245,8 @@ class CrglistAnalyser:
 		
 	def ListingCollectorFromFile(self, page_file):
 		'''
+		Unit test / debug method
+
 		Take a raw page from rental listing with header, listing links and footer,
 		return an dictionary of 
 			{ link, date, adtext, price, bedrooms, sqft, city }
