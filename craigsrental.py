@@ -51,7 +51,7 @@ class CraigslistRental:
 			self.PAGE_SAVE_FILE
 
 	def run(self):
-		page_content = self.downloadPage(write_to_file=False)
+		page_content = self.downloadPage(self.urls[0])
 
 		# lets get to the data, call the analyser
 		adlistings = self.listingCollector(page_content)
@@ -59,9 +59,14 @@ class CraigslistRental:
 		if self.DEBUG > 1:
 			print adlistings
 
-		self.listingSendMail(adlistings)
+		# Special processing
+		key1 = [keyword, keyword_listings] =  ["stocklmeir", self.listingSearchKeyword(adlistings, "stocklmeir")]
 
-	def downloadPage(self, write_to_file=False):
+		print key1
+
+		self.listingSendMail(adlistings, key1)
+
+	def downloadPage(self, url, write_to_file=None):
 		''' 
 		Download / scrap data from Craigslist
 		Download webpage to a buffer 
@@ -69,33 +74,29 @@ class CraigslistRental:
 			- TODO: improve to do chunks reads 
 		'''
 		try:
-			url = self.urls[0]
 			print "Downloading...%s" % url
 
 			req = urllib2.Request(url)
 			page = urllib2.urlopen(req)
 			if self.DEBUG > 1:
 				print page.info()
-
-			print "Successfully connected...downloading..."
+				print "Successfully connected...downloading..."
 			
-
 			# Yes, we are reading the whole page into one buffer;
 			# TODO: memory in-efficient, fix it someday
 			page_content = page.read()
-			print "My debug is " + str(self.DEBUG)
 			if self.DEBUG > 1:
 				print page_content
 
 			# Cleanup
 			page.close()
 
+			# Debug hook to save the content in a file for analysis
 			if write_to_file:
-				page_file = self.PAGE_SAVE_FILE
-				print "writing to file %s" % page_file
-				page_file = open(page_file, 'w')
-				page_file.write(page_content)
-				page_file.close()
+				print "writing to file %s" % write_to_file
+				pfile = open(write_to_file, 'w')
+				pfile.write(page_content)
+				pfile.close()
 
 			return page_content
 
@@ -176,7 +177,22 @@ class CraigslistRental:
 		f.close()
 		self.listingCollector(page_content)
 
-	def listingSendMail(self, adlistings):
+	def listingSearchKeyword(self, adlistings, keyword):
+
+		keyword_adlistings = []
+
+		for ad in adlistings:
+			print "Searching keyword in url %s" % ad[2]
+			page_content = self.downloadPage("http://sfbay.craigslist.org" + ad[2])
+			# TODO: this is really inefficient (tolower the whole page content);
+			#       find another way perhaps using regex
+			if page_content.lower().find(keyword.lower()) == -1: continue 
+			print "Found keyword match"
+			keyword_adlistings.append(ad)
+
+		return keyword_adlistings
+
+	def listingSendMail(self, adlistings, keyword_search1):
 
 		curdatetime = time.strftime("%c")
 
@@ -187,6 +203,33 @@ class CraigslistRental:
        			Craigslist Cupertino Rental Listing<br>
       			Generated at {page_gen_datetime}.
 			    </p>
+			    """.format(page_gen_datetime=curdatetime)
+
+		if len(keyword_search1[1]) > 0:
+			# Table header for keyword search listing
+			html += """
+					<p> Found listing matching {keyword} </p>
+				    <table>
+				    <tr>
+				    <th> Date </th>
+				    <th> Title </th>
+				    <th> City </th>
+				    <th> Price </th>
+				    <th>    Bedroom / SQFT    </th>
+				    </tr>
+				    """.format(keyword=keyword_search1[0])
+
+			for ad in keyword_search1[1]:
+				html_line = "<tr><td> {date} </td><td> <a href=""http://sfbay.craigslist.org/{url}"">{title}</a> </td><td> {city} </td><td> {price} </td><td> {sqft} </td></tr>".format(date=ad[0], title=ad[1], url=ad[2], price=ad[3], sqft=ad[4], city=ad[5])
+				if self.DEBUG > 1:
+					print "html_line is" + html_line
+				html += html_line
+
+			html += "</table>"
+
+		# Other listings
+		html += """
+				<p> Other listings </p>
 			    <table>
 			    <tr>
 			    <th> Date </th>
@@ -195,8 +238,7 @@ class CraigslistRental:
 			    <th> Price </th>
 			    <th>    Bedroom / SQFT    </th>
 			    </tr>
-			    """.format(page_gen_datetime=curdatetime)
-
+			    """
 
 		for ad in adlistings: 			
 			html_line = "<tr><td> {date} </td><td> <a href=""http://sfbay.craigslist.org/{url}"">{title}</a> </td><td> {city} </td><td> {price} </td><td> {sqft} </td></tr>".format(date=ad[0], title=ad[1], url=ad[2], price=ad[3], sqft=ad[4], city=ad[5])
@@ -204,8 +246,9 @@ class CraigslistRental:
 				print "html_line is" + html_line
 			html += html_line
 
+		html += "</table>"
+				
 		html +="""
-				</table>
 			  	</body>
 				</html>
 				"""
